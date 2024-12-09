@@ -1,10 +1,12 @@
 """Widget generators and their signal handlers"""
 
 import os
+from collections import defaultdict
 
 # Standard Library
 # pylint: disable=no-member,too-many-public-methods
 from gettext import gettext as _
+from typing import DefaultDict
 
 # Third Party Libraries
 from gi.repository import Gtk
@@ -13,11 +15,10 @@ from gi.repository import Gtk
 from lutris import settings, sysoptions
 from lutris.config import LutrisConfig
 from lutris.game import Game
-from lutris.gui.config.widget_generator import WidgetGenerator
+from lutris.gui.config.widget_generator import ConfigErrorBox, ConfigWarningBox, WidgetGenerator
 from lutris.gui.widgets.common import Label, VBox
 from lutris.runners import InvalidRunnerError, import_runner
 from lutris.util.log import logger
-from lutris.util.strings import gtk_safe
 from lutris.util.wine.wine import clear_wine_version_cache
 
 
@@ -38,8 +39,8 @@ class ConfigBox(VBox):
         self.files_list_store = None
         self.reset_buttons = {}
         self.wrappers = {}
-        self.warning_boxes = {}
-        self.error_boxes = {}
+        self.warning_boxes: DefaultDict[str, list] = defaultdict(list)
+        self.error_boxes: DefaultDict[str, list] = defaultdict(list)
         self._advanced_visibility = False
         self._filter = ""
 
@@ -253,7 +254,7 @@ class ConfigBox(VBox):
                     option_container.pack_start(option_body, False, False, 0)
                     warning = ConfigWarningBox(option["warning"], option_key)
                     warning.update_warning(self.lutris_config)
-                    self.warning_boxes[option_key] = warning
+                    self.warning_boxes[option_key].append(warning)
                     option_container.pack_start(warning, False, False, 0)
 
                 if "error" in option:
@@ -262,8 +263,11 @@ class ConfigBox(VBox):
                     option_container.pack_start(option_body, False, False, 0)
                     error = ConfigErrorBox(option["error"], option_key, wrapper)
                     error.update_warning(self.lutris_config)
-                    self.error_boxes[option_key] = error
-                    option_container.pack_start(error, False, False, 0)
+                    gen.error_widgets.append(error)
+
+                for error_widget in gen.error_widgets:
+                    self.error_boxes[option_key].append(error_widget)
+                    option_container.pack_start(error_widget, False, False, 0)
 
                 # Hide if advanced
                 if option.get("advanced"):
@@ -281,11 +285,13 @@ class ConfigBox(VBox):
         self.advanced_visibility = show_advanced
 
     def update_warnings(self) -> None:
-        for box in self.warning_boxes.values():
-            box.update_warning(self.lutris_config)
+        for box_list in self.warning_boxes.values():
+            for box in box_list:
+                box.update_warning(self.lutris_config)
 
-        for box in self.error_boxes.values():
-            box.update_warning(self.lutris_config)
+        for box_list in self.error_boxes.values():
+            for box in box_list:
+                box.update_warning(self.lutris_config)
 
     def on_option_changed(self, option_name, value):
         """Common actions when value changed on a widget"""
@@ -417,76 +423,3 @@ class SystemConfigBox(ConfigBox):
             self.generate_top_info_box(
                 _("If modified, these options supersede the same options from " "the global preferences.")
             )
-
-
-class UnderslungMessageBox(Gtk.Box):
-    """A box to display a message with an icon inside the configuration dialog."""
-
-    def __init__(self, icon_name, margin_left=18, margin_right=18, margin_bottom=6):
-        super().__init__(
-            spacing=6,
-            visible=False,
-            margin_left=margin_left,
-            margin_right=margin_right,
-            margin_bottom=margin_bottom,
-            no_show_all=True,
-        )
-
-        image = Gtk.Image(visible=True)
-        image.set_from_icon_name(icon_name, Gtk.IconSize.DND)
-        self.pack_start(image, False, False, 0)
-        self.label = Gtk.Label(visible=True, xalign=0)
-        self.label.set_line_wrap(True)
-        self.pack_start(self.label, False, False, 0)
-
-    def show_markup(self, markup):
-        """Displays the markup given, and shows this box. If markup is empty or None,
-        this hides the box instead. Returns the new visibility."""
-        visible = bool(markup)
-
-        if markup:
-            self.label.set_markup(str(markup))
-
-        self.set_visible(visible)
-        return visible
-
-
-class ConfigMessageBox(UnderslungMessageBox):
-    def __init__(self, warning, option_key, icon_name, **kwargs):
-        self.warning = warning
-        self.option_key = option_key
-        super().__init__(icon_name, **kwargs)
-
-        if not callable(warning):
-            text = gtk_safe(warning)
-
-            if text:
-                self.label.set_markup(str(text))
-
-    def update_warning(self, config: LutrisConfig) -> None:
-        try:
-            if callable(self.warning):
-                text = self.warning(config, self.option_key)
-            else:
-                text = self.warning
-        except Exception as err:
-            logger.exception("Unable to generate configuration warning: %s", err)
-            text = gtk_safe(str(err))
-
-        return self.show_markup(text)
-
-
-class ConfigWarningBox(ConfigMessageBox):
-    def __init__(self, warning, option_key):
-        super().__init__(warning, option_key, icon_name="dialog-warning")
-
-
-class ConfigErrorBox(ConfigMessageBox):
-    def __init__(self, error, option_key, wrapper):
-        super().__init__(error, option_key, icon_name="dialog-error")
-        self.wrapper = wrapper
-
-    def update_warning(self, config: LutrisConfig) -> None:
-        visible = super().update_warning(config)
-        self.wrapper.set_sensitive(not visible)
-        return visible

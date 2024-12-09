@@ -4,7 +4,7 @@
 # pylint: disable=no-member,too-many-public-methods
 import os
 from gettext import gettext as _
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 # Third Party Libraries
 from gi.repository import Gdk, Gtk
@@ -14,6 +14,7 @@ from lutris.gui.widgets import NotificationSource
 from lutris.gui.widgets.common import EditableGrid, FileChooserEntry, Label
 from lutris.gui.widgets.searchable_combobox import SearchableCombobox
 from lutris.util.log import logger
+from lutris.util.strings import gtk_safe
 
 
 class WidgetGenerator:
@@ -24,7 +25,8 @@ class WidgetGenerator:
 
     GeneratorFunction = Callable[[Dict[str, Any], Any, Any], Optional[Gtk.Widget]]
 
-    def __init__(self) -> None:
+    def __init__(self, lutris_config: LutrisConfig = None) -> None:
+        self.lutris_config = lutris_config or LutrisConfig()
         self._default_directory: Optional[str] = None
         self.changed = NotificationSource()  # takes option_key, new_value
 
@@ -33,6 +35,7 @@ class WidgetGenerator:
         self.default_value = None
         self.tooltip_default: Optional[str] = None
         self.option_widget: Optional[Gtk.Widget] = None
+        self.error_widgets: List[ConfigMessageBox] = []
 
         self._generators: Dict[str, WidgetGenerator.GeneratorFunction] = {
             "label": self._generate_label,
@@ -56,8 +59,7 @@ class WidgetGenerator:
     def default_directory(self) -> str:
         """This is the directory selected by default by file and directory choosers."""
         if not self._default_directory:
-            lutris_config = LutrisConfig()
-            self._default_directory = lutris_config.system_config.get("game_path") or os.path.expanduser("~")
+            self._default_directory = self.lutris_config.system_config.get("game_path") or os.path.expanduser("~")
         return self._default_directory
 
     @default_directory.setter
@@ -78,6 +80,7 @@ class WidgetGenerator:
         self.default_value = default
         self.tooltip_default = None
         self.option_widget = None
+        self.error_widgets.clear()
 
         if wrapper:
             # Destroy and recreate option widget
@@ -231,7 +234,7 @@ class WidgetGenerator:
         """Generate a combobox (drop-down menu)."""
 
         def populate_combobox_choices():
-            expanded, tooltip_default = expand_combobox_choices()
+            expanded, tooltip_default, _value_is_valid = expand_combobox_choices()
             for choice in expanded:
                 liststore.append(choice)
 
@@ -252,8 +255,8 @@ class WidgetGenerator:
                     choice = (_("%s (default)") % choice[0], choice[1])
                 expanded.append(choice)
             if not has_value and value:
-                expanded.insert(0, (value + " (invalid)", value))
-            return expanded, tooltip_default
+                expanded.insert(0, (value, value))
+            return expanded, tooltip_default, has_value
 
         def on_combobox_scroll(widget, _event):
             """Prevents users from accidentally changing configuration values
@@ -291,7 +294,7 @@ class WidgetGenerator:
 
         combobox.set_id_column(1)
 
-        expanded_choices, _tooltip_default = expand_combobox_choices()
+        expanded_choices, _tooltip_default, value_is_valid = expand_combobox_choices()
         if value in [v for _k, v in expanded_choices]:
             combobox.set_active_id(value)
         elif has_entry:
@@ -305,6 +308,16 @@ class WidgetGenerator:
         combobox.connect("changed", on_combobox_change)
         combobox.connect("scroll-event", on_combobox_scroll)
         combobox.set_valign(Gtk.Align.CENTER)
+
+        def get_invalidity_error(config: LutrisConfig, opt_name: str):
+            return _("The setting '%s' is not valid for this option.") % opt_name
+
+        if not value_is_valid:
+            error_widget = ConfigErrorBox(get_invalidity_error, option_name, self.wrapper)
+            error_widget.update_warning(self.lutris_config)
+            error_widget.show()
+            self.error_widgets.append(error_widget)
+
         return self.build_option_widget(option, combobox)
 
     # ComboBox
@@ -340,8 +353,7 @@ class WidgetGenerator:
             value = default
 
         if "default_path" in option:
-            lutris_config = LutrisConfig()
-            chooser_default_path = lutris_config.system_config.get(option["default_path"])
+            chooser_default_path = self.lutris_config.system_config.get(option["default_path"])
         else:
             chooser_default_path = self.default_directory
 
@@ -496,3 +508,76 @@ class WidgetGenerator:
         grid = EditableGrid(value, columns=["Key", "Value"])
         grid.connect("changed", on_changed, option_name)
         return self.build_option_widget(option, grid)
+
+
+class UnderslungMessageBox(Gtk.Box):
+    """A box to display a message with an icon inside the configuration dialog."""
+
+    def __init__(self, icon_name, margin_left=18, margin_right=18, margin_bottom=6):
+        super().__init__(
+            spacing=6,
+            visible=False,
+            margin_left=margin_left,
+            margin_right=margin_right,
+            margin_bottom=margin_bottom,
+            no_show_all=True,
+        )
+
+        image = Gtk.Image(visible=True)
+        image.set_from_icon_name(icon_name, Gtk.IconSize.DND)
+        self.pack_start(image, False, False, 0)
+        self.label = Gtk.Label(visible=True, xalign=0)
+        self.label.set_line_wrap(True)
+        self.pack_start(self.label, False, False, 0)
+
+    def show_markup(self, markup) -> bool:
+        """Displays the markup given, and shows this box. If markup is empty or None,
+        this hides the box instead. Returns the new visibility."""
+        visible = bool(markup)
+
+        if markup:
+            self.label.set_markup(str(markup))
+
+        self.set_visible(visible)
+        return visible
+
+
+class ConfigMessageBox(UnderslungMessageBox):
+    def __init__(self, message, option_key, icon_name, **kwargs):
+        self.message = message
+        self.option_key = option_key
+        super().__init__(icon_name, **kwargs)
+
+        if not callable(message):
+            text = gtk_safe(message)
+
+            if text:
+                self.label.set_markup(str(text))
+
+    def update_warning(self, config: LutrisConfig) -> bool:
+        try:
+            if callable(self.message):
+                text = self.message(config, self.option_key)
+            else:
+                text = self.message
+        except Exception as err:
+            logger.exception("Unable to generate configuration warning: %s", err)
+            text = gtk_safe(str(err))
+
+        return self.show_markup(text)
+
+
+class ConfigWarningBox(ConfigMessageBox):
+    def __init__(self, warning, option_key):
+        super().__init__(warning, option_key, icon_name="dialog-warning")
+
+
+class ConfigErrorBox(ConfigMessageBox):
+    def __init__(self, error, option_key, wrapper):
+        super().__init__(error, option_key, icon_name="dialog-error")
+        self.wrapper = wrapper
+
+    def update_warning(self, config: LutrisConfig) -> bool:
+        visible = super().update_warning(config)
+        self.wrapper.set_sensitive(not visible)
+        return visible
