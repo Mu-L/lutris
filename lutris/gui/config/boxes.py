@@ -118,7 +118,7 @@ class ConfigBox(VBox):
         help_box.show_all()
 
     def get_widget_generator(self):
-        gen = WidgetGenerator()
+        gen = WidgetGenerator(self.config.get)
         gen.changed.register(self.on_option_changed)
 
         if self.game and self.game.directory:
@@ -254,8 +254,7 @@ class ConfigBox(VBox):
                     option_container.pack_start(option_body, False, False, 0)
                     warning = ConfigWarningBox(option["warning"], option_key)
                     warning.update_warning(self.lutris_config)
-                    self.warning_boxes[option_key].append(warning)
-                    option_container.pack_start(warning, False, False, 0)
+                    gen.warning_widgets.append(warning)
 
                 if "error" in option:
                     option_body = option_container
@@ -268,6 +267,10 @@ class ConfigBox(VBox):
                 for error_widget in gen.error_widgets:
                     self.error_boxes[option_key].append(error_widget)
                     option_container.pack_start(error_widget, False, False, 0)
+
+                for warning_widget in gen.warning_widgets:
+                    self.warning_boxes[option_key].append(warning_widget)
+                    option_container.pack_start(warning_widget, False, False, 0)
 
                 # Hide if advanced
                 if option.get("advanced"):

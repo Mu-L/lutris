@@ -25,7 +25,8 @@ class WidgetGenerator:
 
     GeneratorFunction = Callable[[Dict[str, Any], Any, Any], Optional[Gtk.Widget]]
 
-    def __init__(self, lutris_config: LutrisConfig = None) -> None:
+    def __init__(self, setting_provider: Callable[[str], Any], lutris_config: LutrisConfig = None) -> None:
+        self._setting_provider = setting_provider
         self.lutris_config = lutris_config or LutrisConfig()
         self._default_directory: Optional[str] = None
         self.changed = NotificationSource()  # takes option_key, new_value
@@ -35,6 +36,7 @@ class WidgetGenerator:
         self.default_value = None
         self.tooltip_default: Optional[str] = None
         self.option_widget: Optional[Gtk.Widget] = None
+        self.warning_widgets: List[ConfigMessageBox] = []
         self.error_widgets: List[ConfigMessageBox] = []
 
         self._generators: Dict[str, WidgetGenerator.GeneratorFunction] = {
@@ -80,6 +82,7 @@ class WidgetGenerator:
         self.default_value = default
         self.tooltip_default = None
         self.option_widget = None
+        self.warning_widgets.clear()
         self.error_widgets.clear()
 
         if wrapper:
@@ -150,6 +153,9 @@ class WidgetGenerator:
 
                 self.wrapper.pack_start(widget, expand, expand, 0)
         return widget
+
+    def get_setting(self, option_name: str) -> Any:
+        return self._setting_provider(option_name)
 
     # Label
     def _generate_label(self, option, value, default):
@@ -234,7 +240,7 @@ class WidgetGenerator:
         """Generate a combobox (drop-down menu)."""
 
         def populate_combobox_choices():
-            expanded, tooltip_default, _value_is_valid = expand_combobox_choices()
+            expanded, tooltip_default, _valid_choices = expand_combobox_choices()
             for choice in expanded:
                 liststore.append(choice)
 
@@ -244,6 +250,7 @@ class WidgetGenerator:
         def expand_combobox_choices():
             expanded = []
             tooltip_default = None
+            valid = []
             has_value = False
             for choice in choices:
                 if isinstance(choice, str):
@@ -253,10 +260,11 @@ class WidgetGenerator:
                 if choice[1] == default:
                     tooltip_default = choice[0]
                     choice = (_("%s (default)") % choice[0], choice[1])
+                valid.append(choice[1])
                 expanded.append(choice)
             if not has_value and value:
                 expanded.insert(0, (value, value))
-            return expanded, tooltip_default, has_value
+            return expanded, tooltip_default, valid
 
         def on_combobox_scroll(widget, _event):
             """Prevents users from accidentally changing configuration values
@@ -294,7 +302,7 @@ class WidgetGenerator:
 
         combobox.set_id_column(1)
 
-        expanded_choices, _tooltip_default, value_is_valid = expand_combobox_choices()
+        expanded_choices, _tooltip_default, valid_choices = expand_combobox_choices()
         if value in [v for _k, v in expanded_choices]:
             combobox.set_active_id(value)
         elif has_entry:
@@ -310,13 +318,17 @@ class WidgetGenerator:
         combobox.set_valign(Gtk.Align.CENTER)
 
         def get_invalidity_error(config: LutrisConfig, opt_name: str):
-            return _("The setting '%s' is not valid for this option.") % opt_name
+            v = self.get_setting(opt_name)
+            if v in valid_choices:
+                return None
 
-        if not value_is_valid:
-            error_widget = ConfigErrorBox(get_invalidity_error, option_name, self.wrapper)
-            error_widget.update_warning(self.lutris_config)
-            error_widget.show()
-            self.error_widgets.append(error_widget)
+            return _("The setting '%s' is not valid for this option.") % v
+
+        if value not in valid_choices:
+            warning_widget = ConfigWarningBox(get_invalidity_error, option_name)
+            warning_widget.update_warning(self.lutris_config)
+            warning_widget.show()
+            self.warning_widgets.append(warning_widget)
 
         return self.build_option_widget(option, combobox)
 
