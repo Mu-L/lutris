@@ -155,6 +155,8 @@ class WidgetGenerator:
         return widget
 
     def get_setting(self, option_name: str) -> Any:
+        """Extract the current value for a given option using the function given
+        when the generator is constructed."""
         return self._setting_provider(option_name)
 
     # Label
@@ -322,7 +324,7 @@ class WidgetGenerator:
             if v in valid_choices:
                 return None
 
-            return _("The setting '%s' is not valid for this option.") % v
+            return _("The setting '%s' is no longer available. You should select another choice.") % v
 
         if value not in valid_choices:
             warning_widget = ConfigWarningBox(get_invalidity_error, option_name)
