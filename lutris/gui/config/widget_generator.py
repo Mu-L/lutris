@@ -25,9 +25,8 @@ class WidgetGenerator:
 
     GeneratorFunction = Callable[[Dict[str, Any], Any, Any], Optional[Gtk.Widget]]
 
-    def __init__(self, setting_provider: Callable[[str], Any], lutris_config: LutrisConfig = None) -> None:
+    def __init__(self, setting_provider: Callable[[str], Any]) -> None:
         self._setting_provider = setting_provider
-        self.lutris_config = lutris_config or LutrisConfig()
         self._default_directory: Optional[str] = None
         self.changed = NotificationSource()  # takes option_key, new_value
 
@@ -61,7 +60,8 @@ class WidgetGenerator:
     def default_directory(self) -> str:
         """This is the directory selected by default by file and directory choosers."""
         if not self._default_directory:
-            self._default_directory = self.lutris_config.system_config.get("game_path") or os.path.expanduser("~")
+            lutris_config = LutrisConfig()
+            self._default_directory = lutris_config.system_config.get("game_path") or os.path.expanduser("~")
         return self._default_directory
 
     @default_directory.setter
@@ -328,7 +328,7 @@ class WidgetGenerator:
 
         if value not in valid_choices:
             warning_widget = ConfigWarningBox(get_invalidity_error, option_name)
-            warning_widget.update_warning(self.lutris_config)
+            warning_widget.update_warning(LutrisConfig())
             warning_widget.show()
             self.warning_widgets.append(warning_widget)
 
